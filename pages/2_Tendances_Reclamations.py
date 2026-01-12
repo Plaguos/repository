@@ -230,9 +230,9 @@ def main():
     st.markdown("---")
 
     # =========================
-    # 1) Graphique "Tendance" (inversion : par défaut comparaison par mois)
+    # 1) Graphique "Tendance" (défaut comparaison par mois)
     # =========================
-    st.subheader("Tendance — Réclamations")
+    st.subheader("Tendance — ")
     view_trend = st.radio(
         "Vue (tendance)",
         ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
@@ -308,7 +308,7 @@ def main():
             ))
 
         fig_cmp_total.update_layout(
-            title="Tendance — comparaison inter-années (mois équivalents côte à côte)",
+            title="Tendance — comparaison inter-années (mêmes mois côte à côte)",
             barmode="group",
             xaxis_title="Mois",
             yaxis_title=y_title,
@@ -321,9 +321,9 @@ def main():
     st.markdown("---")
 
     # =========================
-    # 2) Graphique "Total" (déjà présent : même logique + inversion (défaut comparaison))
+    # 2) Graphique "Total" (défaut comparaison)
     # =========================
-    st.subheader("Total mensuel — Réclamations")
+    st.subheader("Total mensuel — ")
     view_total = st.radio(
         "Vue (total)",
         ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
@@ -395,7 +395,7 @@ def main():
             ))
 
         fig_cmp_total.update_layout(
-            title="Total — comparaison inter-années (mois équivalents côte à côte)",
+            title="Total — comparaison inter-années (mêmes mois côte à côte)",
             barmode="group",
             xaxis_title="Mois",
             yaxis_title=y_title,
@@ -408,9 +408,9 @@ def main():
     st.markdown("---")
 
     # =========================
-    # 3) Graphe "Réclamations par type (Top N)" — même logique + inversion (défaut comparaison)
+    # 3) Graphe "Réclamations par type (Top N)" — défaut comparaison + 3e vue via toggle
     # =========================
-    st.subheader(f"Réclamations par type (Top {top_n_types}) — ")
+    st.subheader(f"Réclamations par type (Top {top_n_types}) —")
 
     view_types = st.radio(
         "Vue (types)",
@@ -440,15 +440,18 @@ def main():
             st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
         else:
-            copt1, _ = st.columns(2)
+            copt1, copt2 = st.columns(2)
             with copt1:
                 normalize_pct_types = st.toggle("Normaliser en % du total annuel", value=False, key="norm_types")
+            with copt2:
+                side_by_side = st.toggle(
+                    "Afficher la comparaison côte à côte (Janvier avec Janvier…)",
+                    value=True,
+                    key="types_side_by_side"
+                )
 
             # Reconstruit une table longue sur l'ensemble des types Top N, par Année/Mois
-            df_types = (
-                df[df[type_col].isin(top_types)]
-                .copy()
-            )
+            df_types = df[df[type_col].isin(top_types)].copy()
             df_types["Année"] = df_types["Mois_debut"].dt.year.astype(int)
             df_types["Mois_num"] = df_types["Mois_debut"].dt.month.astype(int)
             df_types["Mois"] = df_types["Mois_num"].map(MOIS_FR)
@@ -461,11 +464,11 @@ def main():
                 .rename(columns={type_col: "Type"})
             )
 
-            # Complète les mois manquants par année/type (0)
             years_order = sorted(df_types_agg["Année"].unique().tolist())
             mois_order = [MOIS_FR[m] for m in range(1, 13)]
             types_order = sorted(df_types_agg["Type"].unique().tolist())
 
+            # Complète les combinaisons Année/Mois/Type manquantes (0)
             full_grid = pd.MultiIndex.from_product(
                 [years_order, range(1, 13), types_order],
                 names=["Année", "Mois_num", "Type"]
@@ -487,24 +490,47 @@ def main():
                 df_types_full["Réclamations"] = df_types_full["Valeur"]
                 y_title = "Réclamations"
 
-            fig_types_cmp = px.bar(
-                df_types_full,
-                x="Mois",
-                y="Réclamations",
-                color="Type",
-                barmode="stack",
-                facet_col="Année",
-                facet_col_wrap=min(3, max(1, len(years_order))),
-                category_orders={"Mois": mois_order},
-                title=f"Réclamations par type (Top {top_n_types}) — comparaison inter-années"
-            )
-            fig_types_cmp.update_layout(
-                xaxis_title="Mois",
-                yaxis_title=y_title,
-                legend_title_text=""
-            )
-            st.plotly_chart(fig_types_cmp, use_container_width=True)
-            st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+            if side_by_side:
+                # ✅ 3e graphique : mêmes mois côte à côte (couleur = année), facette = type
+                fig_types_side = px.bar(
+                    df_types_full,
+                    x="Mois",
+                    y="Réclamations",
+                    color="Année",
+                    barmode="group",
+                    facet_col="Type",
+                    facet_col_wrap=min(3, max(1, len(types_order))),
+                    category_orders={"Mois": mois_order},
+                    title=f"Top {top_n_types} types — comparaison inter-années (mêmes mois côte à côte)"
+                )
+                fig_types_side.update_layout(
+                    xaxis_title="Mois",
+                    yaxis_title=y_title,
+                    legend_title_text=""
+                )
+                st.plotly_chart(fig_types_side, use_container_width=True)
+                st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+            else:
+                # Variante : facettes par année, empilé par type
+                fig_types_cmp = px.bar(
+                    df_types_full,
+                    x="Mois",
+                    y="Réclamations",
+                    color="Type",
+                    barmode="stack",
+                    facet_col="Année",
+                    facet_col_wrap=min(3, max(1, len(years_order))),
+                    category_orders={"Mois": mois_order},
+                    title=f"Réclamations par type (Top {top_n_types}) — comparaison inter-années"
+                )
+                fig_types_cmp.update_layout(
+                    xaxis_title="Mois",
+                    yaxis_title=y_title,
+                    legend_title_text=""
+                )
+                st.plotly_chart(fig_types_cmp, use_container_width=True)
+                st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
     st.markdown("---")
 
