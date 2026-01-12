@@ -232,7 +232,7 @@ def main():
     # =========================
     # 1) Graphique "Tendance" (inversion : par défaut comparaison par mois)
     # =========================
-    st.subheader("Tendance — vues")
+    st.subheader("Tendance — Réclamations")
     view_trend = st.radio(
         "Vue (tendance)",
         ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
@@ -323,7 +323,7 @@ def main():
     # =========================
     # 2) Graphique "Total" (déjà présent : même logique + inversion (défaut comparaison))
     # =========================
-    st.subheader("Total mensuel — vues")
+    st.subheader("Total mensuel — Réclamations")
     view_total = st.radio(
         "Vue (total)",
         ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
@@ -410,7 +410,7 @@ def main():
     # =========================
     # 3) Graphe "Réclamations par type (Top N)" — même logique + inversion (défaut comparaison)
     # =========================
-    st.subheader(f"Réclamations par type (Top {top_n_types}) — vues")
+    st.subheader(f"Réclamations par type (Top {top_n_types}) — ")
 
     view_types = st.radio(
         "Vue (types)",
