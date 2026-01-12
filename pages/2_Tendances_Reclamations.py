@@ -109,8 +109,11 @@ def main():
     df = pd.concat(dfs, ignore_index=True)
 
     with st.sidebar.expander("Filtrer par fichier"):
-        sel_sources = st.multiselect("Fichiers pris en compte", options=sorted(df["Source_fichier"].unique()),
-                                     default=sorted(df["Source_fichier"].unique()))
+        sel_sources = st.multiselect(
+            "Fichiers pris en compte",
+            options=sorted(df["Source_fichier"].unique()),
+            default=sorted(df["Source_fichier"].unique())
+        )
     if sel_sources:
         df = df[df["Source_fichier"].isin(sel_sources)].copy()
 
@@ -122,8 +125,10 @@ def main():
         dedup_info = f"Déduplication par '{id_col_guess}' : {before-after} doublon(s)."
     else:
         cols_for_key = [c for c in [date_col, type_col, "Source_fichier"] if c in df.columns]
-        if "Résumé" in df.columns: cols_for_key.append("Résumé")
-        if "Description" in df.columns: cols_for_key.append("Description")
+        if "Résumé" in df.columns:
+            cols_for_key.append("Résumé")
+        if "Description" in df.columns:
+            cols_for_key.append("Description")
         if not cols_for_key:
             cols_for_key = [date_col, type_col]
         before = len(df)
@@ -141,8 +146,10 @@ def main():
 
     min_d, max_d = df["Mois_debut"].min(), df["Mois_debut"].max()
     date_range = st.sidebar.date_input(
-        "Période (Mois début)", value=(min_d.date(), max_d.date()),
-        min_value=min_d.date(), max_value=max_d.date(),
+        "Période (Mois début)",
+        value=(min_d.date(), max_d.date()),
+        min_value=min_d.date(),
+        max_value=max_d.date(),
     )
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_d, end_d = pd.to_datetime(date_range[0]), pd.to_datetime(date_range[1])
@@ -245,46 +252,100 @@ def main():
     st.plotly_chart(fig1, use_container_width=True)
     st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
-    # STL
-    if show_stl and len(monthly_full) >= 6:
-        s = monthly_full.asfreq("MS").fillna(0)
-        try:
-            res = STL(s, period=12, robust=True).fit()
-            fig_stl = go.Figure()
-            fig_stl.add_trace(go.Scatter(x=s.index, y=res.trend, name="Tendance"))
-            fig_stl.add_trace(go.Scatter(x=s.index, y=res.seasonal, name="Saisonnalité"))
-            fig_stl.add_trace(go.Scatter(x=s.index, y=res.resid, name="Résiduel"))
-            fig_stl.update_layout(title="Décomposition STL (12 mois)", xaxis_title="Mois")
-            st.plotly_chart(fig_stl, use_container_width=True)
-            st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+    # ✅ (1) Toggle d'affichage + (2) Normalisation % + (3) Ligne moyenne multi-années
+    st.subheader("Total mensuel — vues & comparaison inter-années")
 
-            trend = res.trend.dropna()
-            evol = (trend.iloc[-1] - trend.iloc[0]) / max(abs(trend.iloc[0]), 1e-9) * 100 if len(trend) >= 2 else 0.0
-            saison_amplitude = (res.seasonal.max() - res.seasonal.min()) / 2
-            resid_abs = res.resid.abs()
-            resid_peak_idx = resid_abs.idxmax()
-            resid_peak_val = res.resid.loc[resid_peak_idx]
-            resid_dir = "positive" if resid_peak_val > 0 else "négative"
+    view_total = st.radio(
+        "Vue",
+        ["Chronologique", "Comparer mêmes mois (Janvier avec Janvier, …)"],
+        horizontal=True
+    )
 
-            phrase = []
-            if evol > 2:
-                phrase.append(f"Tendance générale à la hausse (+{evol:.1f} %).")
-            elif evol < -2:
-                phrase.append(f"Tendance générale à la baisse ({evol:.1f} %).")
-            else:
-                phrase.append("Tendance globale stable.")
-            phrase.append("Saisonnalité marquée (écart typique ±{:.1f}).".format(saison_amplitude)
-                          if saison_amplitude > 5 else "Peu de saisonnalité observable.")
-            phrase.append(
-                f"Anomalie {resid_dir} détectée autour de {mois_label(resid_peak_idx)} "
-                f"(écart de {resid_peak_val:+.0f} par rapport à la tendance)."
+    if view_total == "Chronologique":
+        df_total = monthly_full.rename("Réclamations").reset_index()
+        df_total["Mois_label"] = df_total["Mois_debut"].apply(mois_label)
+        cat_order_total = df_total.sort_values("Mois_debut")["Mois_label"].unique().tolist()
+
+        fig_total = px.bar(
+            df_total,
+            x="Mois_label",
+            y="Réclamations",
+            title="Total des réclamations par mois (chronologique)"
+        )
+        fig_total.update_layout(
+            xaxis_title="Mois",
+            yaxis_title="Réclamations",
+            xaxis=dict(categoryorder="array", categoryarray=cat_order_total)
+        )
+        st.plotly_chart(fig_total, use_container_width=True)
+        st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+    else:
+        copt1, copt2 = st.columns(2)
+        with copt1:
+            normalize_pct = st.toggle("Normaliser en % du total annuel", value=False)
+        with copt2:
+            show_avg_line = st.toggle("Afficher la ligne moyenne multi-années", value=True)
+
+        df_cmp = monthly_full.rename("Valeur").reset_index()
+        df_cmp["Année"] = df_cmp["Mois_debut"].dt.year.astype(int)
+        df_cmp["Mois_num"] = df_cmp["Mois_debut"].dt.month.astype(int)
+        df_cmp["Mois"] = df_cmp["Mois_num"].map(MOIS_FR)
+
+        mois_order = [MOIS_FR[m] for m in range(1, 13)]
+        years_order = sorted(df_cmp["Année"].unique().tolist())
+
+        if normalize_pct:
+            # % du total annuel (chaque année somme à 100%)
+            denom = df_cmp.groupby("Année")["Valeur"].transform("sum").replace(0, np.nan)
+            df_cmp["Réclamations"] = (df_cmp["Valeur"] / denom) * 100
+            y_title = "% du total annuel"
+        else:
+            df_cmp["Réclamations"] = df_cmp["Valeur"]
+            y_title = "Réclamations"
+
+        # Figure combinée (barres par année + ligne moyenne optionnelle)
+        fig_cmp_total = go.Figure()
+
+        for y in years_order:
+            d = df_cmp[df_cmp["Année"] == y].copy()
+            # force ordre mois 1..12
+            d = d.set_index("Mois_num").reindex(range(1, 13), fill_value=0).reset_index()
+            d["Mois"] = d["Mois_num"].map(MOIS_FR)
+            fig_cmp_total.add_trace(
+                go.Bar(
+                    x=d["Mois"],
+                    y=d["Réclamations"],
+                    name=str(y)
+                )
             )
 
-            st.markdown("### Interprétation automatique (STL)")
-            st.info(" ".join(phrase))
+        if show_avg_line:
+            avg = (
+                df_cmp.groupby("Mois_num")["Réclamations"]
+                .mean()
+                .reindex(range(1, 13), fill_value=0)
+            )
+            fig_cmp_total.add_trace(
+                go.Scatter(
+                    x=[MOIS_FR[m] for m in avg.index],
+                    y=avg.values,
+                    name="Moyenne (multi-années)",
+                    mode="lines+markers"
+                )
+            )
 
-        except Exception as e:
-            st.info(f"STL non affichée : {e}")
+        fig_cmp_total.update_layout(
+            title="Total par mois — comparaison inter-années (mois équivalents côte à côte)",
+            barmode="group",
+            xaxis_title="Mois",
+            yaxis_title=y_title,
+            xaxis=dict(categoryorder="array", categoryarray=mois_order),
+            legend_title_text=""
+        )
+
+        st.plotly_chart(fig_cmp_total, use_container_width=True)
+        st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
     # Empilé par type
     if not monthly_by_type.empty:
@@ -310,11 +371,19 @@ def main():
     mois_labels = [mois_label(m) for m in mois_options]
     colA, colB = st.columns(2)
     with colA:
-        idx_a = st.selectbox("Mois A (référence)", options=list(range(len(mois_options))),
-                             format_func=lambda i: mois_labels[i], index=0 if len(mois_options) > 0 else 0)
+        idx_a = st.selectbox(
+            "Mois A (référence)",
+            options=list(range(len(mois_options))),
+            format_func=lambda i: mois_labels[i],
+            index=0 if len(mois_options) > 0 else 0
+        )
     with colB:
-        idx_b = st.selectbox("Mois B (à comparer)", options=list(range(len(mois_options))),
-                             format_func=lambda i: mois_labels[i], index=(len(mois_options)-1 if len(mois_options) > 0 else 0))
+        idx_b = st.selectbox(
+            "Mois B (à comparer)",
+            options=list(range(len(mois_options))),
+            format_func=lambda i: mois_labels[i],
+            index=(len(mois_options) - 1 if len(mois_options) > 0 else 0)
+        )
 
     if mois_options:
         mA, mB = mois_options[idx_a], mois_options[idx_b]
@@ -335,7 +404,10 @@ def main():
             sA = sA.reindex(all_cols, fill_value=0)
             sB = sB.reindex(all_cols, fill_value=0)
             diff = (sB - sA).sort_values(ascending=False)
-            pct_diff = pd.Series(np.where(sA.values != 0, (sB.values - sA.values)/sA.values*100, np.nan), index=all_cols)
+            pct_diff = pd.Series(
+                np.where(sA.values != 0, (sB.values - sA.values) / sA.values * 100, np.nan),
+                index=all_cols
+            )
 
             df_diff_plot = pd.DataFrame({
                 "Type": diff.index.astype(str),
@@ -367,7 +439,7 @@ def main():
     with cmo2:
         y1 = st.selectbox("Année A", options=years_available, index=0 if years_available else 0)
     with cmo3:
-        y2 = st.selectbox("Année B", options=years_available, index=(len(years_available)-1 if years_available else 0))
+        y2 = st.selectbox("Année B", options=years_available, index=(len(years_available) - 1 if years_available else 0))
 
     try:
         mA2 = pd.Timestamp(int(y1), int(month_pick), 1)
@@ -389,7 +461,10 @@ def main():
             sA2 = sA2.reindex(all_cols2, fill_value=0)
             sB2 = sB2.reindex(all_cols2, fill_value=0)
             diff2 = (sB2 - sA2).sort_values(ascending=False)
-            pct_diff2 = pd.Series(np.where(sA2.values != 0, (sB2.values - sA2.values)/sA2.values*100, np.nan), index=all_cols2)
+            pct_diff2 = pd.Series(
+                np.where(sA2.values != 0, (sB2.values - sA2.values) / sA2.values * 100, np.nan),
+                index=all_cols2
+            )
 
             df_same_month = pd.DataFrame({
                 "Type": diff2.index.astype(str),
@@ -430,7 +505,8 @@ def main():
             mbt_fmt = ensure_month_french(monthly_by_type.rename_axis("Mois").reset_index(), "Mois")
             st.dataframe(mbt_fmt)
         else:
-            mbt_fmt = pd.DataFrame(); st.write("n/a")
+            mbt_fmt = pd.DataFrame()
+            st.write("n/a")
 
     c3, c4 = st.columns(2)
     with c3:
@@ -450,7 +526,8 @@ def main():
             cbt_fmt = ensure_month_french(counts_by_type.rename_axis("Mois").reset_index(), "Mois")
             st.dataframe(cbt_fmt)
         else:
-            cbt_fmt = pd.DataFrame(); st.write("n/a")
+            cbt_fmt = pd.DataFrame()
+            st.write("n/a")
 
     st.markdown("---")
     st.subheader("Exports CSV")
@@ -487,5 +564,48 @@ def main():
             file_name=f"reclamations_detail_{mois_det.strftime('%Y-%m')}.csv",
             mime="text/csv"
         )
+
+    # ✅ STL — déplacé à la fin
+    if show_stl and len(monthly_full) >= 6:
+        s = monthly_full.asfreq("MS").fillna(0)
+        try:
+            res = STL(s, period=12, robust=True).fit()
+            fig_stl = go.Figure()
+            fig_stl.add_trace(go.Scatter(x=s.index, y=res.trend, name="Tendance"))
+            fig_stl.add_trace(go.Scatter(x=s.index, y=res.seasonal, name="Saisonnalité"))
+            fig_stl.add_trace(go.Scatter(x=s.index, y=res.resid, name="Résiduel"))
+            fig_stl.update_layout(title="Décomposition STL (12 mois)", xaxis_title="Mois")
+            st.plotly_chart(fig_stl, use_container_width=True)
+            st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+            trend = res.trend.dropna()
+            evol = (trend.iloc[-1] - trend.iloc[0]) / max(abs(trend.iloc[0]), 1e-9) * 100 if len(trend) >= 2 else 0.0
+            saison_amplitude = (res.seasonal.max() - res.seasonal.min()) / 2
+            resid_abs = res.resid.abs()
+            resid_peak_idx = resid_abs.idxmax()
+            resid_peak_val = res.resid.loc[resid_peak_idx]
+            resid_dir = "positive" if resid_peak_val > 0 else "négative"
+
+            phrase = []
+            if evol > 2:
+                phrase.append(f"Tendance générale à la hausse (+{evol:.1f} %).")
+            elif evol < -2:
+                phrase.append(f"Tendance générale à la baisse ({evol:.1f} %).")
+            else:
+                phrase.append("Tendance globale stable.")
+            phrase.append(
+                "Saisonnalité marquée (écart typique ±{:.1f}).".format(saison_amplitude)
+                if saison_amplitude > 5 else "Peu de saisonnalité observable."
+            )
+            phrase.append(
+                f"Anomalie {resid_dir} détectée autour de {mois_label(resid_peak_idx)} "
+                f"(écart de {resid_peak_val:+.0f} par rapport à la tendance)."
+            )
+
+            st.markdown("### Interprétation automatique (STL)")
+            st.info(" ".join(phrase))
+
+        except Exception as e:
+            st.info(f"STL non affichée : {e}")
 
 main()
