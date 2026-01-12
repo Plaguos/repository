@@ -229,39 +229,110 @@ def main():
 
     st.markdown("---")
 
-    # Graphiques
-    fig1 = go.Figure()
-    fig1.add_trace(go.Scatter(x=monthly_full.index, y=monthly_full.values, mode="lines+markers", name="Réclamations"))
-    if not anomalies.empty:
-        fig1.add_trace(go.Scatter(
-            x=anomalies.index, y=anomalies["Réclamations"], mode="markers",
-            name="Anomalies", marker=dict(size=12, symbol="diamond")
-        ))
-    if len(monthly_full) >= 2:
-        roll = monthly_full.rolling(3).mean()
-        fig1.add_trace(go.Scatter(x=roll.index, y=roll.values, name="Moy. mobile 3m", line=dict(dash="dash")))
-    if len(monthly_full) >= 3:
-        med12 = monthly_full.tail(12).median() if len(monthly_full) >= 12 else monthly_full.median()
-        fig1.add_hline(y=med12, line=dict(dash="dot"), annotation_text=f"Médiane : {med12:.0f}")
-
-    fig1.update_layout(
-        title="Tendance mensuelle (anomalies & références)",
-        xaxis_title="Mois", yaxis_title="Réclamations",
-        xaxis=dict(tickmode="array", tickvals=monthly_full.index, ticktext=[mois_label(x) for x in monthly_full.index])
+    # =========================
+    # 1) Graphique "Tendance" (inversion : par défaut comparaison par mois)
+    # =========================
+    st.subheader("Tendance — vues")
+    view_trend = st.radio(
+        "Vue (tendance)",
+        ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
+        horizontal=True,
+        index=0,
+        key="view_trend"
     )
-    st.plotly_chart(fig1, use_container_width=True)
-    st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
-    # ✅ (1) Toggle d'affichage + (2) Normalisation % + (3) Ligne moyenne multi-années
-    st.subheader("Total mensuel — vues & comparaison inter-années")
+    if view_trend == "Mensuel chronologique":
+        fig1 = go.Figure()
+        fig1.add_trace(go.Scatter(x=monthly_full.index, y=monthly_full.values, mode="lines+markers", name="Réclamations"))
+        if not anomalies.empty:
+            fig1.add_trace(go.Scatter(
+                x=anomalies.index, y=anomalies["Réclamations"], mode="markers",
+                name="Anomalies", marker=dict(size=12, symbol="diamond")
+            ))
+        if len(monthly_full) >= 2:
+            roll = monthly_full.rolling(3).mean()
+            fig1.add_trace(go.Scatter(x=roll.index, y=roll.values, name="Moy. mobile 3m", line=dict(dash="dash")))
+        if len(monthly_full) >= 3:
+            med12 = monthly_full.tail(12).median() if len(monthly_full) >= 12 else monthly_full.median()
+            fig1.add_hline(y=med12, line=dict(dash="dot"), annotation_text=f"Médiane : {med12:.0f}")
 
+        fig1.update_layout(
+            title="Tendance mensuelle (anomalies & références)",
+            xaxis_title="Mois", yaxis_title="Réclamations",
+            xaxis=dict(tickmode="array", tickvals=monthly_full.index, ticktext=[mois_label(x) for x in monthly_full.index])
+        )
+        st.plotly_chart(fig1, use_container_width=True)
+        st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+    else:
+        copt1, copt2 = st.columns(2)
+        with copt1:
+            normalize_pct_trend = st.toggle("Normaliser en % du total annuel", value=False, key="norm_trend")
+        with copt2:
+            show_avg_line_trend = st.toggle("Afficher la ligne moyenne multi-années", value=True, key="avg_trend")
+
+        df_cmp = monthly_full.rename("Valeur").reset_index()
+        df_cmp["Année"] = df_cmp["Mois_debut"].dt.year.astype(int)
+        df_cmp["Mois_num"] = df_cmp["Mois_debut"].dt.month.astype(int)
+        df_cmp["Mois"] = df_cmp["Mois_num"].map(MOIS_FR)
+
+        mois_order = [MOIS_FR[m] for m in range(1, 13)]
+        years_order = sorted(df_cmp["Année"].unique().tolist())
+
+        if normalize_pct_trend:
+            denom = df_cmp.groupby("Année")["Valeur"].transform("sum").replace(0, np.nan)
+            df_cmp["Réclamations"] = (df_cmp["Valeur"] / denom) * 100
+            y_title = "% du total annuel"
+        else:
+            df_cmp["Réclamations"] = df_cmp["Valeur"]
+            y_title = "Réclamations"
+
+        fig_cmp_total = go.Figure()
+        for y in years_order:
+            d = df_cmp[df_cmp["Année"] == y].copy()
+            d = d.set_index("Mois_num").reindex(range(1, 13), fill_value=0).reset_index()
+            d["Mois"] = d["Mois_num"].map(MOIS_FR)
+            fig_cmp_total.add_trace(go.Bar(x=d["Mois"], y=d["Réclamations"], name=str(y)))
+
+        if show_avg_line_trend:
+            avg = (
+                df_cmp.groupby("Mois_num")["Réclamations"]
+                .mean()
+                .reindex(range(1, 13), fill_value=0)
+            )
+            fig_cmp_total.add_trace(go.Scatter(
+                x=[MOIS_FR[m] for m in avg.index],
+                y=avg.values,
+                name="Moyenne (multi-années)",
+                mode="lines+markers"
+            ))
+
+        fig_cmp_total.update_layout(
+            title="Tendance — comparaison inter-années (mois équivalents côte à côte)",
+            barmode="group",
+            xaxis_title="Mois",
+            yaxis_title=y_title,
+            xaxis=dict(categoryorder="array", categoryarray=mois_order),
+            legend_title_text=""
+        )
+        st.plotly_chart(fig_cmp_total, use_container_width=True)
+        st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+    st.markdown("---")
+
+    # =========================
+    # 2) Graphique "Total" (déjà présent : même logique + inversion (défaut comparaison))
+    # =========================
+    st.subheader("Total mensuel — vues")
     view_total = st.radio(
-        "Vue",
-        ["Chronologique", "Comparer mêmes mois (Janvier avec Janvier, …)"],
-        horizontal=True
+        "Vue (total)",
+        ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
+        horizontal=True,
+        index=0,
+        key="view_total"
     )
 
-    if view_total == "Chronologique":
+    if view_total == "Mensuel chronologique":
         df_total = monthly_full.rename("Réclamations").reset_index()
         df_total["Mois_label"] = df_total["Mois_debut"].apply(mois_label)
         cat_order_total = df_total.sort_values("Mois_debut")["Mois_label"].unique().tolist()
@@ -283,9 +354,9 @@ def main():
     else:
         copt1, copt2 = st.columns(2)
         with copt1:
-            normalize_pct = st.toggle("Normaliser en % du total annuel", value=False)
+            normalize_pct = st.toggle("Normaliser en % du total annuel", value=False, key="norm_total")
         with copt2:
-            show_avg_line = st.toggle("Afficher la ligne moyenne multi-années", value=True)
+            show_avg_line = st.toggle("Afficher la ligne moyenne multi-années", value=True, key="avg_total")
 
         df_cmp = monthly_full.rename("Valeur").reset_index()
         df_cmp["Année"] = df_cmp["Mois_debut"].dt.year.astype(int)
@@ -296,7 +367,6 @@ def main():
         years_order = sorted(df_cmp["Année"].unique().tolist())
 
         if normalize_pct:
-            # % du total annuel (chaque année somme à 100%)
             denom = df_cmp.groupby("Année")["Valeur"].transform("sum").replace(0, np.nan)
             df_cmp["Réclamations"] = (df_cmp["Valeur"] / denom) * 100
             y_title = "% du total annuel"
@@ -304,21 +374,12 @@ def main():
             df_cmp["Réclamations"] = df_cmp["Valeur"]
             y_title = "Réclamations"
 
-        # Figure combinée (barres par année + ligne moyenne optionnelle)
         fig_cmp_total = go.Figure()
-
         for y in years_order:
             d = df_cmp[df_cmp["Année"] == y].copy()
-            # force ordre mois 1..12
             d = d.set_index("Mois_num").reindex(range(1, 13), fill_value=0).reset_index()
             d["Mois"] = d["Mois_num"].map(MOIS_FR)
-            fig_cmp_total.add_trace(
-                go.Bar(
-                    x=d["Mois"],
-                    y=d["Réclamations"],
-                    name=str(y)
-                )
-            )
+            fig_cmp_total.add_trace(go.Bar(x=d["Mois"], y=d["Réclamations"], name=str(y)))
 
         if show_avg_line:
             avg = (
@@ -326,42 +387,124 @@ def main():
                 .mean()
                 .reindex(range(1, 13), fill_value=0)
             )
-            fig_cmp_total.add_trace(
-                go.Scatter(
-                    x=[MOIS_FR[m] for m in avg.index],
-                    y=avg.values,
-                    name="Moyenne (multi-années)",
-                    mode="lines+markers"
-                )
-            )
+            fig_cmp_total.add_trace(go.Scatter(
+                x=[MOIS_FR[m] for m in avg.index],
+                y=avg.values,
+                name="Moyenne (multi-années)",
+                mode="lines+markers"
+            ))
 
         fig_cmp_total.update_layout(
-            title="Total par mois — comparaison inter-années (mois équivalents côte à côte)",
+            title="Total — comparaison inter-années (mois équivalents côte à côte)",
             barmode="group",
             xaxis_title="Mois",
             yaxis_title=y_title,
             xaxis=dict(categoryorder="array", categoryarray=mois_order),
             legend_title_text=""
         )
-
         st.plotly_chart(fig_cmp_total, use_container_width=True)
         st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
-    # Empilé par type
-    if not monthly_by_type.empty:
-        df_stack = monthly_by_type.reset_index().melt(id_vars="Mois_debut", var_name="Type", value_name="Réclamations")
-        df_stack["Mois_label"] = df_stack["Mois_debut"].apply(mois_label)
-        cat_order = df_stack.sort_values("Mois_debut")["Mois_label"].unique().tolist()
-        fig2 = px.bar(
-            df_stack, x="Mois_label", y="Réclamations", color="Type",
-            barmode="stack", title=f"Réclamations par type (Top {top_n_types})"
-        )
-        fig2.update_layout(
-            xaxis_title="Mois", yaxis_title="Réclamations",
-            xaxis=dict(categoryorder="array", categoryarray=cat_order)
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-        st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+    st.markdown("---")
+
+    # =========================
+    # 3) Graphe "Réclamations par type (Top N)" — même logique + inversion (défaut comparaison)
+    # =========================
+    st.subheader(f"Réclamations par type (Top {top_n_types}) — vues")
+
+    view_types = st.radio(
+        "Vue (types)",
+        ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
+        horizontal=True,
+        index=0,
+        key="view_types"
+    )
+
+    if monthly_by_type.empty:
+        st.info("Pas de données pour le graphe par type (Top N).")
+    else:
+        if view_types == "Mensuel chronologique":
+            df_stack = monthly_by_type.reset_index().melt(id_vars="Mois_debut", var_name="Type", value_name="Réclamations")
+            df_stack["Mois_label"] = df_stack["Mois_debut"].apply(mois_label)
+            cat_order = df_stack.sort_values("Mois_debut")["Mois_label"].unique().tolist()
+
+            fig2 = px.bar(
+                df_stack, x="Mois_label", y="Réclamations", color="Type",
+                barmode="stack", title=f"Réclamations par type (Top {top_n_types}) — chronologique"
+            )
+            fig2.update_layout(
+                xaxis_title="Mois", yaxis_title="Réclamations",
+                xaxis=dict(categoryorder="array", categoryarray=cat_order)
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+            st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+        else:
+            copt1, _ = st.columns(2)
+            with copt1:
+                normalize_pct_types = st.toggle("Normaliser en % du total annuel", value=False, key="norm_types")
+
+            # Reconstruit une table longue sur l'ensemble des types Top N, par Année/Mois
+            df_types = (
+                df[df[type_col].isin(top_types)]
+                .copy()
+            )
+            df_types["Année"] = df_types["Mois_debut"].dt.year.astype(int)
+            df_types["Mois_num"] = df_types["Mois_debut"].dt.month.astype(int)
+            df_types["Mois"] = df_types["Mois_num"].map(MOIS_FR)
+
+            df_types_agg = (
+                df_types.groupby(["Année", "Mois_num", "Mois", type_col])
+                .size()
+                .rename("Valeur")
+                .reset_index()
+                .rename(columns={type_col: "Type"})
+            )
+
+            # Complète les mois manquants par année/type (0)
+            years_order = sorted(df_types_agg["Année"].unique().tolist())
+            mois_order = [MOIS_FR[m] for m in range(1, 13)]
+            types_order = sorted(df_types_agg["Type"].unique().tolist())
+
+            full_grid = pd.MultiIndex.from_product(
+                [years_order, range(1, 13), types_order],
+                names=["Année", "Mois_num", "Type"]
+            ).to_frame(index=False)
+            full_grid["Mois"] = full_grid["Mois_num"].map(MOIS_FR)
+
+            df_types_full = full_grid.merge(
+                df_types_agg[["Année", "Mois_num", "Type", "Valeur"]],
+                on=["Année", "Mois_num", "Type"],
+                how="left"
+            )
+            df_types_full["Valeur"] = df_types_full["Valeur"].fillna(0)
+
+            if normalize_pct_types:
+                denom = df_types_full.groupby("Année")["Valeur"].transform("sum").replace(0, np.nan)
+                df_types_full["Réclamations"] = (df_types_full["Valeur"] / denom) * 100
+                y_title = "% du total annuel"
+            else:
+                df_types_full["Réclamations"] = df_types_full["Valeur"]
+                y_title = "Réclamations"
+
+            fig_types_cmp = px.bar(
+                df_types_full,
+                x="Mois",
+                y="Réclamations",
+                color="Type",
+                barmode="stack",
+                facet_col="Année",
+                facet_col_wrap=min(3, max(1, len(years_order))),
+                category_orders={"Mois": mois_order},
+                title=f"Réclamations par type (Top {top_n_types}) — comparaison inter-années"
+            )
+            fig_types_cmp.update_layout(
+                xaxis_title="Mois",
+                yaxis_title=y_title,
+                legend_title_text=""
+            )
+            st.plotly_chart(fig_types_cmp, use_container_width=True)
+            st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
     st.markdown("---")
 
@@ -565,7 +708,7 @@ def main():
             mime="text/csv"
         )
 
-    # ✅ STL — déplacé à la fin
+    # ✅ STL — à la fin
     if show_stl and len(monthly_full) >= 6:
         s = monthly_full.asfreq("MS").fillna(0)
         try:
