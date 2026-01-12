@@ -232,7 +232,7 @@ def main():
     # =========================
     # 1) Graphique "Tendance" (défaut comparaison par mois)
     # =========================
-    st.subheader("Tendance — ")
+    st.subheader("Tendance — vues")
     view_trend = st.radio(
         "Vue (tendance)",
         ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
@@ -323,7 +323,7 @@ def main():
     # =========================
     # 2) Graphique "Total" (défaut comparaison)
     # =========================
-    st.subheader("Total mensuel — ")
+    st.subheader("Total mensuel — vues")
     view_total = st.radio(
         "Vue (total)",
         ["Comparer mêmes mois (Janvier avec Janvier, …)", "Mensuel chronologique"],
@@ -408,9 +408,9 @@ def main():
     st.markdown("---")
 
     # =========================
-    # 3) Graphe "Réclamations par type (Top N)" — défaut comparaison + 3e vue via toggle
+    # 3) Graphe "Réclamations par type (Top N)" — + 4e mode (stack par type + côte à côte par année)
     # =========================
-    st.subheader(f"Réclamations par type (Top {top_n_types}) —")
+    st.subheader(f"Réclamations par type (Top {top_n_types}) — vues")
 
     view_types = st.radio(
         "Vue (types)",
@@ -440,17 +440,23 @@ def main():
             st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
         else:
-            copt1, copt2 = st.columns(2)
+            copt1, _ = st.columns(2)
             with copt1:
                 normalize_pct_types = st.toggle("Normaliser en % du total annuel", value=False, key="norm_types")
-            with copt2:
-                side_by_side = st.toggle(
-                    "Afficher la comparaison côte à côte (Janvier avec Janvier…)",
-                    value=True,
-                    key="types_side_by_side"
-                )
 
-            # Reconstruit une table longue sur l'ensemble des types Top N, par Année/Mois
+            mode_types = st.radio(
+                "Mode comparaison (types)",
+                [
+                    "Côte à côte par type (barres par année, facettes = type)",
+                    "Empilé par type — facettes par année (stack)",
+                    "Empilé par type — côte à côte par année (stack + group)",
+                ],
+                horizontal=False,
+                index=2,  # ✅ par défaut : le nouveau mode demandé
+                key="mode_types"
+            )
+
+            # Table longue Top N par Année/Mois/Type
             df_types = df[df[type_col].isin(top_types)].copy()
             df_types["Année"] = df_types["Mois_debut"].dt.year.astype(int)
             df_types["Mois_num"] = df_types["Mois_debut"].dt.month.astype(int)
@@ -468,7 +474,7 @@ def main():
             mois_order = [MOIS_FR[m] for m in range(1, 13)]
             types_order = sorted(df_types_agg["Type"].unique().tolist())
 
-            # Complète les combinaisons Année/Mois/Type manquantes (0)
+            # Grille complète Année/Mois/Type -> Valeur (0 si absent)
             full_grid = pd.MultiIndex.from_product(
                 [years_order, range(1, 13), types_order],
                 names=["Année", "Mois_num", "Type"]
@@ -490,8 +496,8 @@ def main():
                 df_types_full["Réclamations"] = df_types_full["Valeur"]
                 y_title = "Réclamations"
 
-            if side_by_side:
-                # ✅ 3e graphique : mêmes mois côte à côte (couleur = année), facette = type
+            if mode_types == "Côte à côte par type (barres par année, facettes = type)":
+                # (3e vue) mêmes mois côte à côte, couleur = année, facettes = type
                 fig_types_side = px.bar(
                     df_types_full,
                     x="Mois",
@@ -511,8 +517,8 @@ def main():
                 st.plotly_chart(fig_types_side, use_container_width=True)
                 st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
 
-            else:
-                # Variante : facettes par année, empilé par type
+            elif mode_types == "Empilé par type — facettes par année (stack)":
+                # (ancienne variante) facettes par année, empilé par type
                 fig_types_cmp = px.bar(
                     df_types_full,
                     x="Mois",
@@ -522,7 +528,7 @@ def main():
                     facet_col="Année",
                     facet_col_wrap=min(3, max(1, len(years_order))),
                     category_orders={"Mois": mois_order},
-                    title=f"Réclamations par type (Top {top_n_types}) — comparaison inter-années"
+                    title=f"Réclamations par type (Top {top_n_types}) — comparaison inter-années (facettes années)"
                 )
                 fig_types_cmp.update_layout(
                     xaxis_title="Mois",
@@ -531,6 +537,44 @@ def main():
                 )
                 st.plotly_chart(fig_types_cmp, use_container_width=True)
                 st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+
+            else:
+                # ✅ (4e vue demandée)
+                # Empilé par type, MAIS côte à côte par année pour chaque mois
+                # -> offsetgroup = année, et on empile les types dans le même offsetgroup
+                fig_stack_group = go.Figure()
+
+                # Assure un ordre stable des mois
+                base = df_types_full.sort_values(["Mois_num", "Type", "Année"]).copy()
+
+                for y in years_order:
+                    for t in types_order:
+                        d = base[(base["Année"] == y) & (base["Type"] == t)].sort_values("Mois_num")
+                        # showlegend une seule fois par type (sur la première année)
+                        show_leg = (y == years_order[0])
+                        fig_stack_group.add_trace(
+                            go.Bar(
+                                x=d["Mois"],
+                                y=d["Réclamations"],
+                                name=str(t),
+                                legendgroup=str(t),
+                                showlegend=show_leg,
+                                offsetgroup=str(y),  # -> barres côte à côte par année
+                                hovertemplate=f"Année: {y}<br>Type: {t}<br>Mois: %{{x}}<br>Valeur: %{{y}}<extra></extra>",
+                            )
+                        )
+
+                fig_stack_group.update_layout(
+                    title=f"Top {top_n_types} types — empilé par type & côte à côte par année (mêmes mois)",
+                    barmode="stack",
+                    xaxis_title="Mois",
+                    yaxis_title=y_title,
+                    xaxis=dict(categoryorder="array", categoryarray=mois_order),
+                    legend_title_text="Type",
+                )
+                st.plotly_chart(fig_stack_group, use_container_width=True)
+                st.caption("Export : cliquez sur l’icône caméra (barre du graphique).")
+                st.caption("Lecture : pour chaque mois, une barre par année (côte à côte), et chaque barre est empilée par type.")
 
     st.markdown("---")
 
