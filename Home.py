@@ -10,7 +10,7 @@ Choisis une page dans la barre latérale :
 - **Tendances réclamations (Excel)** : multi-fichiers, anomalies, STL, comparaisons.
 - **Référencement Pannes (Excel)** : saisie + append dans une table Excel.
 - **Comparateur GTFS** : visualiser les différences entre deux GTFS.
-
+- **Valideur GTFS** : vérifier l'intégrité d'un GTFS + génération fiche horaire.
 👉 Ouvre le menu en haut à gauche (ou la barre latérale) pour naviguer.
 """)
 
