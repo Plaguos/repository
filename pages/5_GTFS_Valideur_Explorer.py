@@ -877,6 +877,7 @@ with tabs[0]:
         if detail_key != "(aucun)":
             st.dataframe(details[detail_key], use_container_width=True, hide_index=True)
 # =========================
+# =========================
 # TAB 2 — VUE 2 (lisible, colonnes = courses)
 # =========================
 with tabs[1]:
@@ -913,13 +914,15 @@ with tabs[1]:
     if not allowed_service_ids:
         allowed_service_ids = None
 
-    # -------------------------
-    # Construction Vue 2
-    # -------------------------
     st.divider()
     st.markdown("### Vue 2 — lecture humaine (comme une fiche papier)")
 
     sheets: dict[str, pd.DataFrame] = {}
+
+    # ✅ table CourseCode10 prête une fois (évite recalcul dans la boucle)
+    trips_cc = add_course_code(tables["trips.txt"], max_len=10)[["trip_id", "CourseCode10"]].copy()
+    trips_cc["trip_id"] = trips_cc["trip_id"].astype(str)
+    trips_cc["CourseCode10"] = trips_cc["CourseCode10"].fillna("").astype(str)
 
     for d in week:
         df = trip_dep_arr_for_route_day(
@@ -933,19 +936,33 @@ with tabs[1]:
         if df.empty:
             continue
 
-        # ajouter CourseCode10
-        trips_cc = add_course_code(tables["trips.txt"], max_len=10)[
-            ["trip_id", "CourseCode10"]
-        ]
+        # ✅ sécuriser type trip_id pour merge fiable
+        df["trip_id"] = df["trip_id"].astype(str)
+
+        # ✅ merge CourseCode10
         df = df.merge(trips_cc, on="trip_id", how="left")
+
+        # ✅ garantir colonne + strings
+        if "CourseCode10" not in df.columns:
+            df["CourseCode10"] = ""
+        df["CourseCode10"] = df["CourseCode10"].fillna("").astype(str)
 
         df = df.sort_values("Départ").reset_index(drop=True)
 
-        # format colonne = une course
+        # format colonne = une course (avec anti-collision)
         cols = {}
-        for i, r in df.iterrows():
-            label = f"{r['CourseCode10'] or '—'}"
-            cols[label] = [r["Départ"], r["Arrivée"]]
+        seen = {}
+
+        for _, r in df.iterrows():
+            code = str(r.get("CourseCode10", "")).strip()
+            label = code if code else "—"
+
+            # ✅ si label déjà utilisé (CourseCode10 identique), suffixer
+            seen[label] = seen.get(label, 0) + 1
+            if seen[label] > 1:
+                label = f"{label}#{seen[label]}"
+
+            cols[label] = [r.get("Départ", ""), r.get("Arrivée", "")]
 
         vue2 = pd.DataFrame(cols, index=["Départ", "Arrivée"])
 
@@ -961,8 +978,8 @@ with tabs[1]:
     def export_excel_multi_sheets(sheets_dict: dict[str, pd.DataFrame]) -> bytes:
         out = io.BytesIO()
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
-            for name, df in sheets_dict.items():
-                df.to_excel(writer, sheet_name=name[:31])
+            for name, df_sheet in sheets_dict.items():
+                df_sheet.to_excel(writer, sheet_name=str(name)[:31])
         return out.getvalue()
 
     if sheets:
@@ -975,6 +992,7 @@ with tabs[1]:
         )
     else:
         st.info("Aucune donnée à exporter pour cette semaine.")
+
 # =========================
 # SCRIPT COMPLET — PART 5/5
 # (TAB 3 : Comparaison STRICTE GTFS ↔ Excel Région)
