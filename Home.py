@@ -11,6 +11,7 @@ Choisis une page dans la barre latérale :
 - **Référencement Pannes (Excel)** : saisie + append dans une table Excel.
 - **Comparateur GTFS** : visualiser les différences entre deux GTFS.
 - **Valideur GTFS** : vérifier l'intégrité d'un GTFS + génération fiche horaire.
+- **Carte GTFS BFC** : Afficher la carte intéractive des lignes du réseau Mobigo.
 
 👉 Ouvre le menu en haut à gauche (ou la barre latérale) pour naviguer.
 """)
