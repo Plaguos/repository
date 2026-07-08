@@ -74,7 +74,11 @@ def active_services(tables: dict[str, pd.DataFrame], d: date) -> set[str]:
 # ---------------------- Helpers temps / routes ----------------------
 def parse_gtfs_time_to_minutes(t: str | float | int | None) -> int | None:
     """Convertit 'HH:MM:SS' (HH peut dépasser 24) en minutes depuis 00:00."""
-    if t is None or (isinstance(t, float) and pd.isna(t)):
+    # pd.isna() gère None, float NaN ET pd.NA (valeurs manquantes des colonnes
+    # arrow-backed "string[pyarrow]", devenues le dtype par défaut en pandas 3.x).
+    # L'ancien test isinstance(t, float) ratait pd.NA, ce qui laissait passer
+    # une colonne mal convertie (typée string au lieu de numérique) plus loin.
+    if pd.isna(t):
         return None
     s = str(t).strip()
     if not s or s.lower() == "nan":
@@ -180,8 +184,13 @@ def compute_trip_summary_for_route_day(tables: dict[str, pd.DataFrame], d: date,
         out["company_name"] = None
         out["indic_reservation"] = None
 
-    out["dep_min"] = out["start_departure"].map(parse_gtfs_time_to_minutes)
-    out["arr_min"] = out["end_arrival"].map(parse_gtfs_time_to_minutes)
+    # pd.to_numeric(..., errors="coerce").astype("Int64") force un dtype numérique
+    # nullable même si TOUTES les valeurs de la colonne sont None (cas d'un
+    # route_id/jour où aucune course n'a pu être matchée à des stop_times) :
+    # sans ça, pandas 3.x infère une colonne 100% vide comme "string" (large_string)
+    # au lieu de numérique, ce qui fait planter la soustraction plus loin.
+    out["dep_min"] = pd.to_numeric(out["start_departure"].map(parse_gtfs_time_to_minutes), errors="coerce").astype("Int64")
+    out["arr_min"] = pd.to_numeric(out["end_arrival"].map(parse_gtfs_time_to_minutes), errors="coerce").astype("Int64")
 
     out["sig_start"] = out["start_stop_id"].astype(str) + "|" + out["start_stop_name"].fillna("").astype(str)
     out["sig_end"] = out["end_stop_id"].astype(str) + "|" + out["end_stop_name"].fillna("").astype(str)
@@ -249,7 +258,7 @@ def trip_starts_for_route_day(tables: dict[str, pd.DataFrame], d: date, route_id
     else:
         out["Direction"] = None
 
-    out["dep_min"] = out["Départ course"].map(parse_gtfs_time_to_minutes)
+    out["dep_min"] = pd.to_numeric(out["Départ course"].map(parse_gtfs_time_to_minutes), errors="coerce").astype("Int64")
     out = out.sort_values(["dep_min", "trip_id"], kind="mergesort")
 
     return out[["Départ course", "Direction", "service_id", "trip_id"]].reset_index(drop=True)
@@ -313,10 +322,18 @@ def compare_prod_test(prod: pd.DataFrame, test: pd.DataFrame) -> tuple[pd.DataFr
         suffixes=("_PROD", "_TEST"),
     )
 
+    # pd.to_numeric(..., errors="coerce") en dernier rempart : garantit que la
+    # soustraction ne plante jamais, même si une colonne est arrivée jusqu'ici
+    # mal typée (string) ; les valeurs non convertibles deviennent NaN au lieu
+    # de faire lever une ArrowNotImplementedError.
     if "dep_min_TEST" in matched.columns and "dep_min_PROD" in matched.columns:
-        matched["Δ départ (min)"] = matched["dep_min_TEST"] - matched["dep_min_PROD"]
+        dep_test = pd.to_numeric(matched["dep_min_TEST"], errors="coerce")
+        dep_prod = pd.to_numeric(matched["dep_min_PROD"], errors="coerce")
+        matched["Δ départ (min)"] = dep_test - dep_prod
     if "arr_min_TEST" in matched.columns and "arr_min_PROD" in matched.columns:
-        matched["Δ arrivée (min)"] = matched["arr_min_TEST"] - matched["arr_min_PROD"]
+        arr_test = pd.to_numeric(matched["arr_min_TEST"], errors="coerce")
+        arr_prod = pd.to_numeric(matched["arr_min_PROD"], errors="coerce")
+        matched["Δ arrivée (min)"] = arr_test - arr_prod
 
     cols = [
         "Direction_PROD",
